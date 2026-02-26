@@ -583,9 +583,10 @@ func extractSpecURLWithRegex(htmlContent string) string {
 	return ""
 }
 
-// TrySwaggerUIDiscovery attempts to discover OpenAPI specs by checking common Swagger UI paths.
+// TrySwaggerUIDiscoveryDetailed attempts to discover OpenAPI specs by checking common Swagger UI paths.
 // It fetches HTML pages, parses them, and attempts to extract spec URLs.
-func TrySwaggerUIDiscovery(baseURL string, client http.Client) (*openapi3.T, error) {
+// Returns both the discovered spec URL and the parsed spec.
+func TrySwaggerUIDiscoveryDetailed(baseURL string, client http.Client) (string, *openapi3.T, error) {
 	for _, path := range SwaggerUIPaths {
 		fullURL, err := ResolveRelativeURL(baseURL, path)
 		if err != nil {
@@ -610,7 +611,7 @@ func TrySwaggerUIDiscovery(baseURL string, client http.Client) (*openapi3.T, err
 				spec, err := FetchAndValidateSpec(resolvedURL, client)
 				if err == nil && spec != nil {
 					log.Infof("Found spec via Swashbuckle config at: %s", resolvedURL)
-					return spec, nil
+					return resolvedURL, spec, nil
 				}
 			}
 		}
@@ -623,7 +624,7 @@ func TrySwaggerUIDiscovery(baseURL string, client http.Client) (*openapi3.T, err
 				spec, err := FetchAndValidateSpec(resolvedURL, client)
 				if err == nil && spec != nil {
 					log.Infof("Found spec URL in Swagger UI HTML: %s", resolvedURL)
-					return spec, nil
+					return resolvedURL, spec, nil
 				}
 			}
 		}
@@ -657,7 +658,7 @@ func TrySwaggerUIDiscovery(baseURL string, client http.Client) (*openapi3.T, err
 			})
 
 			if foundSpec != nil {
-				return foundSpec, nil
+				return fullURL, foundSpec, nil
 			}
 		}
 
@@ -696,10 +697,16 @@ func TrySwaggerUIDiscovery(baseURL string, client http.Client) (*openapi3.T, err
 			})
 
 			if foundSpec != nil {
-				return foundSpec, nil
+				return fullURL, foundSpec, nil
 			}
 		}
 	}
 
-	return nil, fmt.Errorf("no spec found via Swagger UI discovery")
+	return "", nil, fmt.Errorf("no spec found via Swagger UI discovery")
+}
+
+// TrySwaggerUIDiscovery is a compatibility wrapper for existing callers.
+func TrySwaggerUIDiscovery(baseURL string, client http.Client) (*openapi3.T, error) {
+	_, spec, err := TrySwaggerUIDiscoveryDetailed(baseURL, client)
+	return spec, err
 }

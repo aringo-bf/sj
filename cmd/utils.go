@@ -23,6 +23,7 @@ var accessibleEndpoints []string
 var jsonResultsStringArray []string
 var jsonResultArray []Result
 var jsonVerboseResultArray []VerboseResult
+var suppressAutomateJSONFinalize bool
 var specTitle string
 var specDescription string
 var externalRefCache = make(map[string]map[string]interface{})
@@ -755,7 +756,9 @@ func BuildRequestsFromPaths(spec map[string]interface{}, client http.Client, api
 				jsonResultArray = append(jsonResultArray, result)
 			}
 		}
-		writeLog(8899, "", "", "", "")
+		if !suppressAutomateJSONFinalize {
+			writeLog(8899, "", "", "", "")
+		}
 	}
 }
 

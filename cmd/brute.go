@@ -1,11 +1,9 @@
 package cmd
 
 import (
-	"bufio"
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -22,6 +20,9 @@ import (
 
 var endpointOnly bool
 var endpointWordlist string
+var bruteContinue bool
+var bruteMaxFound int
+var bruteRunAutomate bool
 
 var prefixDirs []string = []string{"", "/swagger", "/swagger/docs", "/swagger/latest", "/swagger/v1", "/swagger/v2", "/swagger/v3", "/swagger/static", "/swagger/ui", "/swagger-ui", "/api-docs", "/api-docs/v1", "/api-docs/v2", "/apidocs", "/api", "/api/v1", "/api/v2", "/api/v3", "/v1", "/v2", "/v3", "/doc", "/docs", "/docs/swagger", "/docs/swagger/v1", "/docs/swagger/v2", "/docs/swagger-ui", "/docs/swagger-ui/v1", "/docs/swagger-ui/v2", "/docs/v1", "/docs/v2", "/docs/v3", "/public", "/redoc"}
 var jsonEndpoints []string = []string{"", "/index", "/swagger", "/swagger-ui", "/swagger-resources", "/swagger-config", "/openapi", "/api", "/api-docs", "/apidocs", "/v1", "/v2", "/v3", "/doc", "/docs", "/apispec", "/apispec_1", "/api-merged"}
@@ -34,6 +35,9 @@ var bruteCmd = &cobra.Command{
 	Long:  `The brute command sends requests to the target to find operation definitions based on commonly used file locations.`,
 	Run: func(cmd *cobra.Command, args []string) {
 		currentCommand = "brute"
+		if err := validateBruteFlags(); err != nil {
+			log.Fatal(err)
+		}
 
 		if randomUserAgent {
 			if UserAgent != "Swagger Jacker (github.com/BishopFox/sj)" {
@@ -43,73 +47,34 @@ var bruteCmd = &cobra.Command{
 
 		client := CheckAndConfigureProxy()
 
-		// Phase 1: Check if the provided URL is a direct spec file
-		if strings.HasSuffix(swaggerURL, ".json") || strings.HasSuffix(swaggerURL, ".yaml") || strings.HasSuffix(swaggerURL, ".yml") {
-			log.Info("Checking if URL is a direct spec file...")
-			spec, err := TryDirectSpec(swaggerURL, client)
-			if err == nil && spec != nil {
-				log.Infof("Found direct spec at: %s\n", swaggerURL)
-				handleSpecFound(spec)
-				return
+		options := DiscoveryOptions{
+			Continue:     bruteContinue,
+			MaxFound:     bruteMaxFound,
+			ShowProgress: true,
+			DedupeMode:   DedupeURLAndHash,
+		}
+		if bruteRunAutomate {
+			options.OnDiscovered = func(discovered DiscoveredSpec) {
+				log.Infof("Discovered spec [%s]: %s", discovered.Phase, discovered.URL)
+				report := ExecuteAutomateSpecBytes(client, discovered.SpecBytes, discovered.URL, true)
+				if report.Error != "" {
+					log.Errorf("Automate run failed for %s: %s", discovered.URL, report.Error)
+				}
 			}
 		}
 
-		// Phase 2: Try Swagger UI discovery on common paths
-		u, err := url.Parse(swaggerURL)
+		log.Info("Starting multi-phase discovery...")
+		specs, err := DiscoverSpecs(swaggerURL, client, endpointWordlist, options)
 		if err != nil {
-			log.Warnf("Error parsing URL:%s\n", err)
-		}
-		target := u.Scheme + "://" + u.Host
-
-		log.Info("Attempting Swagger UI discovery...")
-		spec, err := TrySwaggerUIDiscovery(target, client)
-		if err == nil && spec != nil {
-			handleSpecFound(spec)
+			log.Errorf("\nNo definition file found for:\t%s\n", swaggerURL)
 			return
 		}
 
-		// Phase 3 & 4: Priority URLs and full brute force
-		log.Info("Starting brute force discovery...")
-		var allURLs []string
-		if endpointWordlist == "" {
-			allURLs = append(allURLs, makeURLs(target, priorityURLs, "", true)...)
-			allURLs = append(allURLs, makeURLs(target, jsonEndpoints, "", false)...)
-			allURLs = append(allURLs, makeURLs(target, javascriptEndpoints, ".js", false)...)
-			allURLs = append(allURLs, makeURLs(target, jsonEndpoints, ".json", false)...)
-			allURLs = append(allURLs, makeURLs(target, jsonEndpoints, "/", false)...)
-		} else {
-			endpointList, err := os.Open(endpointWordlist)
-			if err != nil {
-				log.Fatalf("failed to open file: %s", err)
-			}
-			defer endpointList.Close()
-
-			scanner := bufio.NewScanner(endpointList)
-			for scanner.Scan() {
-				endpoint := scanner.Text()
-				fullURL := target + endpoint
-				allURLs = append(allURLs, fullURL)
-			}
-
-			if err := scanner.Err(); err != nil {
-				log.Fatalf("failed to read words from file: %s", err)
-			}
-		}
-		if rateLimit > 0 && strings.ToLower(outputFormat) != "json" {
-			log.Infof("Sending %d requests at a rate of %d requests per second. This could take a while...\n", len(allURLs), rateLimit)
-		} else if rateLimit == 0 && strings.ToLower(outputFormat) != "json" {
-			log.Infof("Sending %d requests with no rate limit (unlimited). This could take a while...\n", len(allURLs))
-		} else {
-			log.Infof("Sending %d requests. This could take a while...\n", len(allURLs))
+		if bruteRunAutomate {
+			return
 		}
 
-		specFound, definitionFile := findDefinitionFile(allURLs, client)
-		if specFound {
-			handleSpecFound(definitionFile)
-			// TODO: Check if (future implementation) automate flag is true and if so than call the 'sj automate' command with the discovered definition file.
-		} else {
-			log.Errorf("\nNo definition file found for:\t%s\n", swaggerURL)
-		}
+		emitBruteDiscoveryResults(specs)
 	},
 }
 
@@ -136,6 +101,72 @@ func makeURLs(target string, endpoints []string, fileExtension string, skipPrefi
 		}
 	}
 	return urls
+}
+
+func validateBruteFlags() error {
+	if strings.TrimSpace(swaggerURL) == "" {
+		return fmt.Errorf("the --url flag is required")
+	}
+	if bruteRunAutomate && endpointOnly {
+		return fmt.Errorf("cannot use --run-automate with --endpoint-only")
+	}
+	if bruteMaxFound > 0 && !bruteContinue {
+		return fmt.Errorf("--max-found requires --continue")
+	}
+	return nil
+}
+
+func emitBruteDiscoveryResults(specs []DiscoveredSpec) {
+	if len(specs) == 0 {
+		return
+	}
+
+	for _, discovered := range specs {
+		log.Infof("Definition file found [%s]: %s", discovered.Phase, discovered.URL)
+	}
+
+	if endpointOnly {
+		var urls []string
+		for _, discovered := range specs {
+			urls = append(urls, discovered.URL)
+			fmt.Println(discovered.URL)
+		}
+		if outfile != "" {
+			contents := []byte(strings.Join(urls, "\n") + "\n")
+			if err := os.WriteFile(outfile, contents, 0644); err != nil {
+				log.Errorf("Error writing file: %s\n", err)
+			}
+		}
+		return
+	}
+
+	if len(specs) == 1 {
+		handleSpecFound(specs[0].Spec)
+		return
+	}
+
+	rawSpecs := make([]json.RawMessage, 0, len(specs))
+	for _, discovered := range specs {
+		rawSpecs = append(rawSpecs, json.RawMessage(discovered.SpecBytes))
+	}
+	combined, err := json.Marshal(rawSpecs)
+	if err != nil {
+		log.Errorf("Error marshalling discovered specs: %v", err)
+		return
+	}
+
+	if outfile != "" {
+		if err := os.WriteFile(outfile, combined, 0644); err != nil {
+			log.Errorf("Error writing file: %s\n", err)
+			return
+		}
+		if f, err := filepath.Abs(outfile); err == nil {
+			log.Infof("Wrote file to %s\n", f)
+		}
+		return
+	}
+
+	fmt.Println(string(combined))
 }
 
 func findDefinitionFile(urls []string, client http.Client) (bool, *openapi3.T) {
@@ -226,9 +257,11 @@ func findDefinitionFile(urls []string, client http.Client) (bool, *openapi3.T) {
 }
 
 func init() {
-	// TODO: Add a flag here (boolean) that defaults to false that will cause the program to execute 'sj automate' on the discovered definition file automatically.
 	bruteCmd.PersistentFlags().StringVarP(&endpointWordlist, "wordlist", "w", "", "The file containing a list of paths to brute force for discovery.")
 	bruteCmd.Flags().BoolVarP(&endpointOnly, "endpoint-only", "e", false, "Only return the identified endpoint")
+	bruteCmd.Flags().BoolVar(&bruteContinue, "continue", false, "Continue brute-force scanning after first discovered spec.")
+	bruteCmd.Flags().IntVar(&bruteMaxFound, "max-found", 0, "Maximum number of unique specs to process in --continue mode (0 = unlimited).")
+	bruteCmd.Flags().BoolVar(&bruteRunAutomate, "run-automate", false, "Run automate checks immediately for each discovered spec.")
 }
 
 func ExtractSpecFromJS(bodyBytes []byte) []byte {

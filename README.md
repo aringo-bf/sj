@@ -61,6 +61,25 @@ WARN Manual testing may be required.               Method=POST Status=400 Target
 WARN Manual testing may be required.               Method=POST Status=400 Target=/v2/v2/user
 ```
 
+### Bulk + Fallback Mode
+
+The `automate` command supports bulk target processing and discovery fallback:
+
+- `--url-file <path>`: newline-delimited targets (hosts or URLs). Blank lines and `# comments` are ignored.
+- `--fallback-brute`: if direct spec loading fails, automatically run brute discovery and then automate each discovered spec.
+
+When a host is listed without a scheme, `https://` is assumed.
+
+**Examples:**
+
+```bash
+# Bulk automate from file
+$ sj automate --url-file targets.txt -F json
+
+# Single target with fallback discovery
+$ sj automate -u https://example.com/wrong/path/swagger.json --fallback-brute
+```
+
 ### Enhanced Interactive Mode
 
 The `automate` command supports an `--enhanced` flag that enables an interactive mode designed for investigating ambiguous API responses. This mode is particularly useful for:
@@ -134,6 +153,13 @@ Continue outside spec? [Y/n]:
 
 - `--enhanced` - Enable interactive mode
 - `--max-retries int` - Maximum attempts per endpoint (default: 5)
+- `--url-file string` - Bulk target input file
+- `--fallback-brute` - Run brute discovery when direct spec loading fails
+
+**Flag conflicts:**
+
+- `-u/--url` cannot be used with `--url-file`
+- `--fallback-brute` cannot be used with `--local-file`
 
 **Note:** Enhanced mode is incompatible with `--quiet` flag as it requires interactive input.
 
@@ -199,6 +225,27 @@ INFO[0000] Sending 2173 requests. This could take a while...
 Request: 343
 INFO[0033] Definition file found: https://petstore.swagger.io/v2/swagger 
 ```
+
+The `brute` command also supports multi-spec workflows:
+
+- `--continue`: keep scanning after first discovered spec
+- `--max-found <n>`: stop after `n` unique discovered specs (`0` = unlimited)
+- `--run-automate`: immediately run `automate` checks for each discovered spec
+
+**Examples:**
+
+```bash
+# Continue scanning for multiple specs (e.g., v1/v2/v3)
+$ sj brute -u https://example.com --continue --max-found 10
+
+# Discover and immediately test each discovered spec
+$ sj brute -u https://example.com --continue --run-automate
+```
+
+**Flag conflicts:**
+
+- `--max-found` requires `--continue`
+- `--run-automate` cannot be used with `--endpoint-only`
 
 > Use the `convert` command to convert a definition file from version 2 to version 3.
 
