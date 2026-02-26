@@ -7,6 +7,7 @@ import (
 
 var apiTarget string
 var basePath string
+var currentCommand string // Track which command is running
 var customDate string
 var customEmail string
 var customURL string
@@ -48,6 +49,9 @@ $ sj brute -u https://petstore.swagger.io
 Convert a Swagger (v2) definition file to an OpenAPI (v3) definition file:
 $ sj convert -u https://petstore.swagger.io/v2/swagger.json -o openapi.json`,
 
+	PersistentPreRun: func(cmd *cobra.Command, args []string) {
+		InitRateLimiter(rateLimit)
+	},
 	Run: func(cmd *cobra.Command, args []string) {
 		if len(args) < 1 {
 			log.Error("Command not specified. See the --help flag for usage.")
@@ -79,7 +83,7 @@ func init() {
 	rootCmd.PersistentFlags().StringVarP(&proxy, "proxy", "p", "NOPROXY", "Proxy host and port. Example: http://127.0.0.1:8080")
 	rootCmd.PersistentFlags().BoolVarP(&quiet, "quiet", "q", false, "Do not prompt for user input - uses default values for all requests.")
 	rootCmd.PersistentFlags().BoolVar(&randomUserAgent, "randomize-user-agent", false, "Randomizes the user agent string. Default is 'false'.")
-	// rootCmd.PersistentFlags().IntVarP(&rateLimit, "rate", "r", 15, "Limit the number of requests per second.") // NEED TO RE-IMPLEMENT RATE LIMIT
+	rootCmd.PersistentFlags().IntVarP(&rateLimit, "rate", "r", 10, "Limit the number of requests per second. Set to 0 for unlimited.")
 	rootCmd.PersistentFlags().StringArrayVarP(&safeWords, "safe-word", "s", nil, "Avoids 'dangerous word' check for the specified word(s). Multiple flags are accepted.")
 	rootCmd.PersistentFlags().BoolVar(&strictProtocol, "strict-protocol", false, "Use exact protocol from spec without HTTPS upgrade attempts. Default is 'false'.")
 	rootCmd.PersistentFlags().StringVarP(&apiTarget, "target", "T", "", "Manually set a target for the requests to be made if separate from the host the documentation resides on.")

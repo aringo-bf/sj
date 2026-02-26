@@ -33,12 +33,7 @@ var bruteCmd = &cobra.Command{
 	Short: "Sends a series of automated requests to discover hidden API operation definitions.",
 	Long:  `The brute command sends requests to the target to find operation definitions based on commonly used file locations.`,
 	Run: func(cmd *cobra.Command, args []string) {
-
-		/* // NEED TO RE-IMPLEMENT RATE LIMIT
-		if rateLimit <= 0 {
-			log.Fatal("Invalid rate supplied. Must be a positive number")
-		}
-		*/
+		currentCommand = "brute"
 
 		if randomUserAgent {
 			if UserAgent != "Swagger Jacker (github.com/BishopFox/sj)" {
@@ -102,6 +97,8 @@ var bruteCmd = &cobra.Command{
 		}
 		if rateLimit > 0 && strings.ToLower(outputFormat) != "json" {
 			log.Infof("Sending %d requests at a rate of %d requests per second. This could take a while...\n", len(allURLs), rateLimit)
+		} else if rateLimit == 0 && strings.ToLower(outputFormat) != "json" {
+			log.Infof("Sending %d requests with no rate limit (unlimited). This could take a while...\n", len(allURLs))
 		} else {
 			log.Infof("Sending %d requests. This could take a while...\n", len(allURLs))
 		}
@@ -337,7 +334,7 @@ func UnmarshalSpec(bodyBytes []byte) (newDoc *openapi3.T) {
 			fmt.Printf("Error converting v2 document to v3: %s\n", err)
 		}
 		return newDoc
-	} else if os.Args[1] == "brute" {
+	} else if currentCommand == "brute" {
 		var noDoc openapi3.T
 		return &noDoc
 	} else {

@@ -8,11 +8,11 @@ import (
 	"math/rand"
 	"net/http"
 	"net/url"
-	"os"
 	"strings"
 	"time"
 
 	log "github.com/sirupsen/logrus"
+	"golang.org/x/time/rate"
 )
 
 var (
@@ -24,6 +24,7 @@ var (
 	requestStatus          int
 	riskSurveyed           bool = false
 	UserAgent              string
+	limiter                *rate.Limiter
 	userAgents             []string = []string{
 		"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/88.0.4324.150 Safari/537.36",
 		"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/14.0.2 Safari/605.1.15",
@@ -53,7 +54,34 @@ var (
 	userChoice string
 )
 
-func MakeRequest(client http.Client, method, target string, timeout int64, reqData io.Reader) ([]byte, string, int) {
+func endpointForDangerousCheck(u *url.URL) string {
+	path := u.EscapedPath()
+	if path == "" {
+		path = "/"
+	}
+	if u.RawQuery == "" {
+		return path
+	}
+	return path + "?" + u.RawQuery
+}
+
+func rewindReader(r io.Reader) io.Reader {
+	if r == nil {
+		return nil
+	}
+	seeker, ok := r.(io.Seeker)
+	if !ok {
+		return nil
+	}
+	if _, err := seeker.Seek(0, io.SeekStart); err != nil {
+		return nil
+	}
+	return r
+}
+
+// MakeRequestWithHeaders is like MakeRequest but accepts custom headers for the request
+// This is used by enhanced mode to apply user-modified headers
+func MakeRequestWithHeaders(client http.Client, method, target string, timeout int64, reqData io.Reader, customHeaders map[string]string) ([]byte, string, int) {
 	if quiet {
 		avoidDangerousRequests = "y"
 	}
@@ -64,9 +92,9 @@ func MakeRequest(client http.Client, method, target string, timeout int64, reqDa
 		log.Printf("Error parsing URL '%s': %v - skipping request.", target, err)
 		return nil, "", 0
 	}
-	endpoint := u.RawPath + "?" + u.RawQuery
+	endpoint := endpointForDangerousCheck(u)
 	for _, v := range dangerousStrings {
-		if os.Args[1] == "automate" && strings.Contains(endpoint, v) && !strings.Contains(strings.Join(safeWords, ","), v) {
+		if currentCommand == "automate" && strings.Contains(endpoint, v) && !strings.Contains(strings.Join(safeWords, ","), v) {
 			userChoice = ""
 			if avoidDangerousRequests == "y" {
 				return nil, "", 0
@@ -98,6 +126,27 @@ func MakeRequest(client http.Client, method, target string, timeout int64, reqDa
 		return nil, "", 0
 	}
 
+	// Apply custom headers first (for enhanced mode)
+	// Use local variables to avoid mutating global state
+	localUserAgent := UserAgent
+	localContentType := contentType
+	localAccept := accept
+
+	for key, value := range customHeaders {
+		// Case-insensitive header name comparison
+		if strings.EqualFold(key, "User-Agent") {
+			localUserAgent = value
+		}
+		if strings.EqualFold(key, "Content-Type") {
+			localContentType = value
+		}
+		if strings.EqualFold(key, "Accept") {
+			localAccept = value
+		}
+		req.Header.Set(key, value)
+	}
+
+	// Apply global headers (don't override custom headers)
 	for i := range Headers {
 		delimIndex := strings.Index(Headers[i], ":")
 		if delimIndex == -1 {
@@ -108,39 +157,49 @@ func MakeRequest(client http.Client, method, target string, timeout int64, reqDa
 		key := strings.TrimSpace(Headers[i][:delimIndex])
 		value := strings.TrimSpace(Headers[i][delimIndex+1:])
 
-		if key == "User-Agent" {
-			UserAgent = value
+		// Only set if not already set by custom headers
+		if req.Header.Get(key) == "" {
+			// Case-insensitive header name comparison
+			if strings.EqualFold(key, "User-Agent") {
+				localUserAgent = value
+			}
+			if strings.EqualFold(key, "Content-Type") {
+				localContentType = value
+			}
+			if strings.EqualFold(key, "Accept") {
+				localAccept = value
+			}
+			req.Header.Set(key, value)
 		}
-		if key == "Content-Type" {
-			contentType = value
-		}
-		if key == "Accept" {
-			accept = value
-		}
-		req.Header.Set(key, value)
 	}
 
 	// User-Agent handling
 	if randomUserAgent {
-		rand.New(rand.NewSource(time.Now().UnixNano()))
-		UserAgent = userAgents[rand.Intn(len(userAgents))]
-		req.Header.Set("User-Agent", UserAgent)
+		randomizer := rand.New(rand.NewSource(time.Now().UnixNano()))
+		localUserAgent = userAgents[randomizer.Intn(len(userAgents))]
+		req.Header.Set("User-Agent", localUserAgent)
 	} else {
-		req.Header.Set("User-Agent", UserAgent)
+		req.Header.Set("User-Agent", localUserAgent)
 	}
 
-	if accept == "" {
+	if localAccept == "" {
 		req.Header.Set("Accept", "application/json, text/html, */*")
 	} else {
-		req.Header.Set("Accept", accept)
+		req.Header.Set("Accept", localAccept)
 	}
 
 	if method == "POST" {
-		if contentType == "" {
+		if localContentType == "" {
 			req.Header.Set("Content-Type", "application/json")
 		} else {
-			req.Header.Set("Content-Type", contentType)
+			req.Header.Set("Content-Type", localContentType)
 		}
+	}
+
+	// Apply rate limiting before sending request
+	if err := WaitForRateLimit(ctx); err != nil {
+		log.Printf("Rate limit wait cancelled: %v", err)
+		return nil, "", 0
 	}
 
 	resp, err := client.Do(req.WithContext(ctx))
@@ -159,19 +218,34 @@ func MakeRequest(client http.Client, method, target string, timeout int64, reqDa
 		}
 		return nil, "", 0
 	}
+	defer resp.Body.Close()
 
 	bodyBytes, _ := io.ReadAll(resp.Body)
 	bodyString := string(bodyBytes)
 
 	if (resp.StatusCode == 301 || resp.StatusCode == 302) && strings.Contains(bodyString, "<html>") {
 		redirect, _ := resp.Location()
-		bodyBytes, bodyString, requestStatus = MakeRequest(client, method, redirect.Scheme+"://"+redirect.Host+redirect.Path, timeout, reqData)
+		redirectTarget := target
+		if redirect != nil {
+			redirectTarget = redirect.String()
+		}
+
+		redirectBody := reqData
+		if method != http.MethodGet && method != http.MethodHead {
+			redirectBody = rewindReader(reqData)
+		}
+		bodyBytes, bodyString, requestStatus = MakeRequestWithHeaders(client, method, redirectTarget, timeout, redirectBody, customHeaders)
 		return bodyBytes, bodyString, requestStatus
 	}
 
 	requestStatus = resp.StatusCode
 
 	return bodyBytes, bodyString, requestStatus
+}
+
+// MakeRequest wraps MakeRequestWithHeaders with nil custom headers for backward compatibility
+func MakeRequest(client http.Client, method, target string, timeout int64, reqData io.Reader) ([]byte, string, int) {
+	return MakeRequestWithHeaders(client, method, target, timeout, reqData, nil)
 }
 
 func CheckContentType(client http.Client, target string) string {
@@ -194,11 +268,17 @@ func CheckContentType(client http.Client, target string) string {
 
 	// User-Agent handling
 	if randomUserAgent {
-		rand.New(rand.NewSource(time.Now().UnixNano()))
-		UserAgent = userAgents[rand.Intn(len(userAgents))]
+		randomizer := rand.New(rand.NewSource(time.Now().UnixNano()))
+		UserAgent = userAgents[randomizer.Intn(len(userAgents))]
 		req.Header.Set("User-Agent", UserAgent)
 	} else if UserAgent != "Swagger Jacker (github.com/BishopFox/sj)" {
 		req.Header.Set("User-Agent", UserAgent)
+	}
+
+	// Apply rate limiting before sending request
+	if err := WaitForRateLimit(ctx); err != nil {
+		log.Printf("Rate limit wait cancelled: %v", err)
+		return ""
 	}
 
 	resp, err := client.Do(req.WithContext(ctx))
@@ -215,6 +295,7 @@ func CheckContentType(client http.Client, target string) string {
 		}
 		return ""
 	}
+	defer resp.Body.Close()
 	return resp.Header.Get("Content-Type")
 }
 
@@ -239,4 +320,24 @@ func CheckAndConfigureProxy() (client http.Client) {
 		},
 	}
 	return client
+}
+
+// InitRateLimiter initializes the global rate limiter with the specified requests per second.
+// If requestsPerSecond <= 0, rate limiting is disabled (limiter set to nil).
+func InitRateLimiter(requestsPerSecond int) {
+	if requestsPerSecond <= 0 {
+		limiter = nil
+		return
+	}
+	limiter = rate.NewLimiter(rate.Limit(requestsPerSecond), 1)
+}
+
+// WaitForRateLimit blocks until the rate limiter allows another request.
+// If the limiter is nil (unlimited mode), returns immediately.
+// Returns error if context is cancelled while waiting.
+func WaitForRateLimit(ctx context.Context) error {
+	if limiter == nil {
+		return nil
+	}
+	return limiter.Wait(ctx)
 }

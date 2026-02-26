@@ -18,6 +18,8 @@ var outputFormat string
 var responsePreviewLength int
 var testString string
 var verbose bool
+var enhanced bool
+var maxRetries int
 
 var automateCmd = &cobra.Command{
 	Use:   "automate",
@@ -26,6 +28,13 @@ var automateCmd = &cobra.Command{
 This enables the user to get a quick look at which endpoints require authentication and which ones do not. If a request
 responds in an abnormal way, manual testing should be conducted (prepare manual tests using the "prepare" command).`,
 	Run: func(cmd *cobra.Command, args []string) {
+		currentCommand = "automate"
+
+		// Check for incompatible flags
+		if enhanced && quiet {
+			log.Fatal("Cannot use --enhanced with --quiet flag. Enhanced mode requires interactive input.")
+		}
+
 		if outfile != "" && strings.ToLower(outputFormat) != "" {
 			if !strings.HasSuffix(strings.ToLower(outfile), "json") && strings.ToLower(outputFormat) != "json" {
 				log.Fatal("Only the JSON output format is supported at the moment.")
@@ -33,12 +42,6 @@ responds in an abnormal way, manual testing should be conducted (prepare manual 
 				outputFormat = "json"
 			}
 		}
-
-		/* // NEED TO RE-IMPLEMENT RATE LIMIT
-		if rateLimit <= 0 {
-			log.Fatal("Invalid rate supplied. Must be a positive number")
-		}
-		*/
 
 		if randomUserAgent {
 			if UserAgent != "Swagger Jacker (github.com/BishopFox/sj)" {
@@ -78,12 +81,18 @@ responds in an abnormal way, manual testing should be conducted (prepare manual 
 
 			bodyBytes, _ = io.ReadAll(specFile)
 		}
-		/* // NEED TO RE-IMPLEMENT RATE LIMIT
 		if rateLimit > 0 && strings.ToLower(outputFormat) != "json" {
 			log.Info("Sending requests at a rate of ", rateLimit, " requests per second.")
+		} else if rateLimit == 0 && strings.ToLower(outputFormat) != "json" {
+			log.Info("Sending requests with no rate limit (unlimited).")
 		}
-		*/
-		GenerateRequests(bodyBytes, client)
+
+		// Validate max-retries in enhanced mode
+		if enhanced && maxRetries < 1 {
+			log.Fatal("Error: --max-retries must be at least 1 in enhanced mode (got ", maxRetries, ").")
+		}
+
+		GenerateRequests(bodyBytes, client, enhanced, maxRetries)
 	},
 }
 
@@ -93,5 +102,7 @@ func init() {
 	automateCmd.PersistentFlags().StringVar(&testString, "test-string", "bishopfox", "The string to use when testing endpoints with string values.")
 	automateCmd.PersistentFlags().BoolVarP(&verbose, "verbose", "v", false, "enable verbose mode, which shows a preview of each response.")
 	automateCmd.PersistentFlags().IntVar(&responsePreviewLength, "response-preview-length", 50, "sets the response preview length when using verbose output.")
+	automateCmd.PersistentFlags().BoolVar(&enhanced, "enhanced", false, "Enable interactive mode for ambiguous responses (designed for LLM/MCP integration).")
+	automateCmd.PersistentFlags().IntVar(&maxRetries, "max-retries", 5, "Maximum number of retry attempts per endpoint in enhanced mode.")
 
 }

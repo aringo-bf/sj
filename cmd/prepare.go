@@ -17,6 +17,7 @@ var prepareCmd = &cobra.Command{
 	Long: `The prepare command prepares a set of commands for manual testing of each endpoint.
 This enables you to test specific API functions for common vulnerabilities or misconfigurations.`,
 	Run: func(cmd *cobra.Command, args []string) {
+		currentCommand = "prepare"
 
 		if randomUserAgent {
 			if UserAgent != "Swagger Jacker (github.com/BishopFox/sj)" {
@@ -36,7 +37,7 @@ This enables you to test specific API functions for common vulnerabilities or mi
 		log.Infof("Gathering API details.\n\n")
 		if swaggerURL != "" {
 			bodyBytes, _, _ := MakeRequest(client, "GET", swaggerURL, timeout, nil)
-			GenerateRequests(bodyBytes, client)
+			GenerateRequests(bodyBytes, client, false, 0)
 		} else {
 			specFile, err := os.Open(localFile)
 			if err != nil {
@@ -51,7 +52,7 @@ This enables you to test specific API functions for common vulnerabilities or mi
 			}
 
 			specBytes, _ := io.ReadAll(specFile)
-			GenerateRequests(specBytes, client)
+			GenerateRequests(specBytes, client, false, 0)
 		}
 	},
 }

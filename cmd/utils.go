@@ -3,7 +3,10 @@ package cmd
 import (
 	"bytes"
 	"encoding/json"
+	stdxml "encoding/xml"
 	"fmt"
+	"io"
+	"mime/multipart"
 	"net/http"
 	"net/url"
 	"os"
@@ -37,6 +40,127 @@ type SchemaNode struct {
 	OneOf                []*SchemaNode
 	AnyOf                []*SchemaNode
 	AdditionalProperties *SchemaNode
+}
+
+// IsAmbiguousResponse returns true if the HTTP status code indicates an ambiguous response
+// that may benefit from modification in enhanced mode (4xx/5xx except 401, 403, 404).
+func IsAmbiguousResponse(statusCode int) bool {
+	// Treat all 4xx/5xx as ambiguous except clear authorization/not-found errors
+	if statusCode >= 400 && statusCode < 600 {
+		if statusCode == 401 || statusCode == 403 || statusCode == 404 {
+			return false // Clear auth/not-found errors
+		}
+		return true
+	}
+	return false
+}
+
+// CreateMultipartBody creates a proper multipart/form-data body with boundary
+// Returns the body bytes and the full Content-Type header value with boundary
+func CreateMultipartBody(fields map[string]interface{}) ([]byte, string, error) {
+	body := &bytes.Buffer{}
+	writer := multipart.NewWriter(body)
+
+	for key, value := range fields {
+		fieldWriter, err := writer.CreateFormField(key)
+		if err != nil {
+			return nil, "", err
+		}
+		_, err = fieldWriter.Write([]byte(fmt.Sprintf("%v", value)))
+		if err != nil {
+			return nil, "", err
+		}
+	}
+
+	err := writer.Close()
+	if err != nil {
+		return nil, "", err
+	}
+
+	// Return body and Content-Type with boundary
+	return body.Bytes(), writer.FormDataContentType(), nil
+}
+
+// getHeaderValue performs case-insensitive lookup of a header value
+func getHeaderValue(headers map[string]string, headerName string) string {
+	for key, value := range headers {
+		if strings.EqualFold(key, headerName) {
+			return value
+		}
+	}
+	return ""
+}
+
+// setHeaderValue performs case-insensitive header replacement while preserving one canonical key.
+func setHeaderValue(headers map[string]string, headerName, headerValue string) map[string]string {
+	if headers == nil {
+		headers = make(map[string]string)
+	}
+	for key := range headers {
+		if strings.EqualFold(key, headerName) {
+			delete(headers, key)
+		}
+	}
+	headers[headerName] = headerValue
+	return headers
+}
+
+func cloneStringMap(values map[string]string) map[string]string {
+	cloned := make(map[string]string, len(values))
+	for key, value := range values {
+		cloned[key] = value
+	}
+	return cloned
+}
+
+func encodeFormBody(fields map[string]interface{}) string {
+	values := url.Values{}
+	for key, value := range fields {
+		values.Set(key, fmt.Sprintf("%v", value))
+	}
+	return values.Encode()
+}
+
+func xmlText(value string) string {
+	var b strings.Builder
+	if err := stdxml.EscapeText(&b, []byte(value)); err != nil {
+		return value
+	}
+	return b.String()
+}
+
+func xmlNodeValue(value interface{}) string {
+	switch typed := value.(type) {
+	case map[string]interface{}:
+		return XmlFromObject(typed)
+	case []interface{}:
+		return XmlFromValue(typed)
+	case nil:
+		return ""
+	default:
+		return xmlText(fmt.Sprintf("%v", typed))
+	}
+}
+
+func XmlFromValue(value interface{}) string {
+	switch typed := value.(type) {
+	case map[string]interface{}:
+		return XmlFromObject(typed)
+	case []interface{}:
+		var b strings.Builder
+		b.WriteString("<items>")
+		for _, item := range typed {
+			b.WriteString("<item>")
+			b.WriteString(xmlNodeValue(item))
+			b.WriteString("</item>")
+		}
+		b.WriteString("</items>")
+		return b.String()
+	case nil:
+		return "<value></value>"
+	default:
+		return fmt.Sprintf("<value>%s</value>", xmlText(fmt.Sprintf("%v", typed)))
+	}
 }
 
 // TryHTTPSUpgrade attempts to upgrade an HTTP target URL to HTTPS.
@@ -111,7 +235,7 @@ func TryHTTPSUpgrade(client http.Client, specURL, targetURL string) string {
 	return httpsURL
 }
 
-func BuildRequestsFromPaths(spec map[string]interface{}, client http.Client) {
+func BuildRequestsFromPaths(spec map[string]interface{}, client http.Client, apiTarget string, enhanced bool, maxRetries int) {
 	paths, ok := spec["paths"].(map[string]interface{})
 	if !ok || paths == nil {
 		log.Fatalf("Could not find any defined operations. Review the file manually.")
@@ -129,6 +253,14 @@ func BuildRequestsFromPaths(spec map[string]interface{}, client http.Client) {
 					continue
 				default:
 					if opMap, ok := op.(map[string]interface{}); ok {
+						// Initialize parameter tracking for enhanced mode
+						pathParams := make(map[string]string)
+						queryParams := make(map[string]string)
+						requestHeaders := make(map[string]string)
+						requestBodyMap := make(map[string]interface{})
+						var requestBody interface{}
+						var requestContentType string
+
 						if responses, ok := opMap["responses"].(map[string]interface{}); ok {
 							for status, respItem := range responses {
 								if respMap, ok := respItem.(map[string]interface{}); ok {
@@ -182,6 +314,8 @@ func BuildRequestsFromPaths(spec map[string]interface{}, client http.Client) {
 															} else {
 																targetURL += fmt.Sprintf("?%s=%s", propertyItem, pVal)
 															}
+															// Track in queryParams map for enhanced mode
+															queryParams[propertyItem] = pVal
 														}
 														handledAsObject = true
 													} else if in == "body" {
@@ -196,6 +330,8 @@ func BuildRequestsFromPaths(spec map[string]interface{}, client http.Client) {
 																bodyData += fmt.Sprintf("%s=%s", propertyItem, pVal)
 																curl += fmt.Sprintf(" -d '%s=%s'", propertyItem, pVal)
 															}
+															// Track in requestBodyMap for enhanced mode
+															requestBodyMap[propertyItem] = propertyValue
 														}
 														handledAsObject = true
 													}
@@ -238,10 +374,13 @@ func BuildRequestsFromPaths(spec map[string]interface{}, client http.Client) {
 												} else {
 													targetURL += fmt.Sprintf("?%s=%s", name, pValue)
 												}
+												queryParams[name] = pValue
 											case "path":
 												targetURL = strings.Replace(targetURL, "{"+name+"}", pValue, 1)
+												pathParams[name] = pValue
 											case "header":
 												curl += fmt.Sprintf(" -H \"%s: %s\"", name, pValue)
+												requestHeaders[name] = pValue
 											case "body":
 												if strings.Contains(curl, "-d '") {
 													bodyData += fmt.Sprintf("&%s=%s", name, pValue)
@@ -251,6 +390,7 @@ func BuildRequestsFromPaths(spec map[string]interface{}, client http.Client) {
 													bodyData += fmt.Sprintf("%s=%s", name, pValue)
 													curl += fmt.Sprintf(" -d '%s=%s'", name, pValue)
 												}
+												requestBodyMap[name] = pValue
 											}
 										}
 									}
@@ -287,22 +427,33 @@ func BuildRequestsFromPaths(spec map[string]interface{}, client http.Client) {
 												bodyBytes, err := json.Marshal(example)
 												if err == nil {
 													curl += fmt.Sprintf(" -H \"Content-Type: application/json\" -d '%s'", bodyBytes)
+													// Store the full example, not just objects
+													requestBody = example
+													requestContentType = cType
 												}
 											}
 											if cType == "application/xml" || cType == "text/xml" {
+												xml := XmlFromValue(example)
+												curl += fmt.Sprintf(" -H \"Content-Type: %s\" -d '%s'", cType, xml)
+												requestBody = example
+												requestContentType = cType
+											}
+											if cType == "application/x-www-form-urlencoded" {
 												if obj, ok := example.(map[string]interface{}); ok {
-													xml := XmlFromObject(obj)
-													curl += fmt.Sprintf(" -H \"Content-Type: %s\" -d '%s'", cType, xml)
+													formData := encodeFormBody(obj)
+													curl += fmt.Sprintf(" -H \"Content-Type: %s\" -d '%s'", cType, formData)
+													requestBody = obj
+													requestContentType = cType
 												}
 											}
-											if cType == "application/x-www-form-urlencoded" || cType == "multipart/form-data" {
+											if cType == "multipart/form-data" {
 												if obj, ok := example.(map[string]interface{}); ok {
-													var formParts []string
-													for k, v := range obj {
-														formParts = append(formParts, fmt.Sprintf("%s=%v", k, v))
-													}
-													formData := strings.Join(formParts, "&")
-													curl += fmt.Sprintf(" -H \"Content-Type: %s\" -d '%s'", cType, formData)
+													// For multipart, we'll store the object and encode it properly when making the request
+													// Curl representation shows simplified form for display
+													formData := encodeFormBody(obj)
+													curl += fmt.Sprintf(" -H \"Content-Type: multipart/form-data\" -d '%s'", formData)
+													requestBody = obj
+													requestContentType = cType
 												}
 											}
 										}
@@ -318,20 +469,201 @@ func BuildRequestsFromPaths(spec map[string]interface{}, client http.Client) {
 							curl = curlParts[0] + "\"" + targetURL + "\"" + curlParts[2]
 						}
 
+						// Handle endpoints command separately (doesn't need full URL parsing)
+						if currentCommand == "endpoints" {
+							fmt.Println(basePath + pathName)
+							continue
+						}
+
 						logURL, parseErr := url.Parse(targetURL)
 						if parseErr != nil || logURL == nil {
 							log.Printf("Error parsing URL '%s': %v - skipping endpoint.", targetURL, parseErr)
 							continue
 						}
-						switch os.Args[1] {
+						switch currentCommand {
 						case "automate":
 							var postBodyData string
-							if strings.ToLower(method) == "post" && strings.Contains(curl, "-d") {
+							var bodyReader io.Reader
+							if strings.Contains(curl, "-d") {
 								dataIndex := strings.Index(curl, "'")
 								postBodyData = curl[dataIndex+1 : len(curl)-1]
+
+								// Handle multipart/form-data encoding properly
+								if requestContentType == "multipart/form-data" && requestBody != nil {
+									if bodyMap, ok := requestBody.(map[string]interface{}); ok {
+										multipartBody, multipartCT, err := CreateMultipartBody(bodyMap)
+										if err == nil {
+											bodyReader = bytes.NewReader(multipartBody)
+											// Update Content-Type header with boundary
+											requestHeaders = setHeaderValue(requestHeaders, "Content-Type", multipartCT)
+										} else {
+											// Fallback to plain text on error
+											bodyReader = bytes.NewReader([]byte(postBodyData))
+										}
+									} else {
+										bodyReader = bytes.NewReader([]byte(postBodyData))
+									}
+								} else {
+									bodyReader = bytes.NewReader([]byte(postBodyData))
+								}
+							} else {
+								bodyReader = bytes.NewReader([]byte{})
 							}
 
-							_, resp, sc := MakeRequest(client, strings.ToUpper(method), targetURL, timeout, bytes.NewReader([]byte(postBodyData)))
+							// Make initial request with custom headers
+							_, resp, sc := MakeRequestWithHeaders(client, strings.ToUpper(method), targetURL, timeout, bodyReader, requestHeaders)
+
+							// Enhanced mode: iterative loop for ambiguous responses
+							if enhanced {
+								// Track current values for iteration
+								currentResp := resp
+								currentSC := sc
+								currentTargetURL := targetURL
+								attemptCount := 1
+								currentMethod := strings.ToUpper(method)
+								currentPathParams := cloneStringMap(pathParams)
+								currentQueryParams := cloneStringMap(queryParams)
+								currentHeaders := cloneStringMap(requestHeaders)
+								var currentBody interface{}
+								if requestBody != nil {
+									currentBody = requestBody
+								} else if len(requestBodyMap) > 0 {
+									currentBody = requestBodyMap
+								}
+								currentContentType := requestContentType
+
+								for IsAmbiguousResponse(currentSC) {
+									// Rebuild state from the most recently modified request so changes persist across attempts.
+									state := NewRequestState(
+										currentMethod,
+										pathName,
+										cloneStringMap(currentPathParams),
+										cloneStringMap(currentQueryParams),
+										cloneStringMap(currentHeaders),
+										currentBody,
+										currentContentType,
+									)
+									state.AttemptNumber = attemptCount
+
+									// Enter interactive modification loop
+									shouldResend, shouldQuit := InteractiveModifyLoop(
+										state,
+										currentSC,
+										currentResp,
+										maxRetries,
+										spec,
+										opMap,
+										apiTarget,
+										basePath,
+									)
+
+									if shouldQuit {
+										return // User requested to quit
+									}
+
+									if !shouldResend {
+										break // User chose to move to next endpoint
+									}
+
+									// Persist user changes so future ambiguous loops keep modified method/body/headers.
+									currentMethod = state.Method
+									currentPathParams = cloneStringMap(state.PathParams)
+									currentQueryParams = cloneStringMap(state.QueryParams)
+									currentHeaders = cloneStringMap(state.Headers)
+									currentBody = state.Body
+									currentContentType = state.ContentType
+									attemptCount = state.AttemptNumber
+
+									// Stop before sending if the next resend would exceed max retries.
+									if attemptCount > maxRetries {
+										fmt.Printf("\n=== MAX RETRIES REACHED (%d/%d) ===\n", maxRetries, maxRetries)
+										fmt.Println("Auto-advancing to next endpoint.")
+										break
+									}
+
+									// Rebuild request from modified state
+									// FIX: Pass apiTarget (not targetURL) to BuildURL
+									modifiedURL := state.BuildURL(apiTarget, basePath)
+									currentTargetURL = modifiedURL
+
+									// Prepare body for resend
+									var modifiedBodyReader io.Reader
+									if state.Body != nil {
+										// Get current Content-Type from headers (may have been changed)
+										effectiveContentType := getHeaderValue(state.Headers, "Content-Type")
+										if effectiveContentType == "" {
+											effectiveContentType = state.ContentType
+										}
+
+										// Handle object bodies
+										if bodyMap, ok := state.Body.(map[string]interface{}); ok && len(bodyMap) > 0 {
+											if strings.Contains(effectiveContentType, "application/json") {
+												bodyBytes, err := json.Marshal(bodyMap)
+												if err == nil {
+													modifiedBodyReader = bytes.NewReader(bodyBytes)
+												}
+											} else if strings.Contains(effectiveContentType, "application/xml") || strings.Contains(effectiveContentType, "text/xml") {
+												modifiedBodyReader = bytes.NewReader([]byte(XmlFromValue(bodyMap)))
+											} else if strings.Contains(effectiveContentType, "application/x-www-form-urlencoded") {
+												// URL-encoded form data
+												formData := encodeFormBody(bodyMap)
+												modifiedBodyReader = bytes.NewReader([]byte(formData))
+											} else if strings.Contains(effectiveContentType, "multipart/form-data") {
+												// Proper multipart encoding with boundary
+												multipartBody, multipartCT, err := CreateMultipartBody(bodyMap)
+												if err == nil {
+													modifiedBodyReader = bytes.NewReader(multipartBody)
+													// Update Content-Type header with boundary in state
+													state.Headers = setHeaderValue(state.Headers, "Content-Type", multipartCT)
+												} else {
+													// Fallback to URL-encoded on error
+													formData := encodeFormBody(bodyMap)
+													modifiedBodyReader = bytes.NewReader([]byte(formData))
+												}
+											} else {
+												// Default to JSON for unknown content types with object bodies
+												bodyBytes, err := json.Marshal(bodyMap)
+												if err == nil {
+													modifiedBodyReader = bytes.NewReader(bodyBytes)
+												}
+											}
+										} else {
+											// Handle non-object JSON bodies (arrays, scalars, etc.)
+											// These should be serialized as-is according to Content-Type
+											if strings.Contains(effectiveContentType, "application/json") {
+												bodyBytes, err := json.Marshal(state.Body)
+												if err == nil {
+													modifiedBodyReader = bytes.NewReader(bodyBytes)
+												}
+											} else if strings.Contains(effectiveContentType, "application/xml") || strings.Contains(effectiveContentType, "text/xml") {
+												modifiedBodyReader = bytes.NewReader([]byte(XmlFromValue(state.Body)))
+											} else {
+												// For other content types, serialize as JSON
+												bodyBytes, err := json.Marshal(state.Body)
+												if err == nil {
+													modifiedBodyReader = bytes.NewReader(bodyBytes)
+												}
+											}
+										}
+									}
+
+									// Make request with modified parameters and custom headers
+									_, currentResp, currentSC = MakeRequestWithHeaders(client, state.Method, modifiedURL, timeout, modifiedBodyReader, state.Headers)
+
+									// Keep state synchronized for the next ambiguous loop.
+									currentMethod = state.Method
+									currentPathParams = cloneStringMap(state.PathParams)
+									currentQueryParams = cloneStringMap(state.QueryParams)
+									currentHeaders = cloneStringMap(state.Headers)
+									currentBody = state.Body
+									currentContentType = state.ContentType
+
+									// Update final values for logging below
+									resp = currentResp
+									sc = currentSC
+									targetURL = currentTargetURL
+								}
+							}
 
 							tempResponsePreviewLength := responsePreviewLength
 							if len(resp) <= responsePreviewLength {
@@ -369,8 +701,6 @@ func BuildRequestsFromPaths(spec map[string]interface{}, client http.Client) {
 								}
 							}
 
-						case "endpoints":
-							fmt.Println(basePath + pathName)
 						case "prepare":
 							var preparedCommand string = curl
 							if strings.ToLower(prepareFor) == "sqlmap" {
@@ -390,7 +720,7 @@ func BuildRequestsFromPaths(spec map[string]interface{}, client http.Client) {
 			}
 		}
 	}
-	if os.Args[1] == "automate" && outputFormat == "json" {
+	if currentCommand == "automate" && outputFormat == "json" {
 		slices.Sort(jsonResultsStringArray)
 		for r := range jsonResultsStringArray {
 			var result Result
@@ -595,12 +925,15 @@ func GenerateExample(node *SchemaNode) interface{} {
 	}
 }
 
-func GenerateRequests(bodyBytes []byte, client http.Client) {
+func GenerateRequests(bodyBytes []byte, client http.Client, enhanced bool, maxRetries int) {
 	// Ingests the specification file
 	spec := SafelyUnmarshalSpec(bodyBytes)
 
 	// Checks defined security schemes and prompts for authentication
-	CheckSecuritySchemes(spec)
+	// Skip for endpoints command since we're just listing paths, not making requests
+	if currentCommand != "endpoints" {
+		CheckSecuritySchemes(spec)
+	}
 
 	u, parseErr := url.Parse(swaggerURL)
 	if parseErr != nil {
@@ -647,7 +980,7 @@ func GenerateRequests(bodyBytes []byte, client http.Client) {
 		// OpenAPI (v3)
 		if servers, ok := spec["servers"].([]interface{}); ok && len(servers) > 0 {
 			if len(servers) > 1 {
-				if !quiet && (os.Args[1] != "endpoints") && apiTarget == "" {
+				if !quiet && (currentCommand != "endpoints") && apiTarget == "" {
 					log.Warn("Multiple servers detected in documentation. You can manually set a server to test with the -T flag.\nThe detected servers are as follows:")
 					for i := range servers {
 						if srv, ok := servers[i].(map[string]interface{}); ok {
@@ -684,7 +1017,7 @@ func GenerateRequests(bodyBytes []byte, client http.Client) {
 								} else {
 									// Local file with relative server URL and no -T flag
 									// Only fail for commands that need full URLs
-									if os.Args[1] != "endpoints" {
+									if currentCommand != "endpoints" {
 										log.Fatalf("Spec has relative server URL '%s' but no base URL available. Use -T to specify target server.", serverURL)
 									}
 								}
@@ -703,7 +1036,7 @@ func GenerateRequests(bodyBytes []byte, client http.Client) {
 		} else {
 			// No server info and no URL to parse - require user to specify target
 			// Only fail for commands that need full URLs
-			if os.Args[1] != "endpoints" {
+			if currentCommand != "endpoints" {
 				log.Fatal("No server information found in spec and no URL provided. Use -T to specify target server.")
 			}
 		}
@@ -714,13 +1047,13 @@ func GenerateRequests(bodyBytes []byte, client http.Client) {
 		apiTarget = TryHTTPSUpgrade(client, swaggerURL, apiTarget)
 	}
 
-	if os.Args[1] != "endpoints" {
+	if currentCommand != "endpoints" {
 		// Prints Title/Description/Version values if they exist
 		PrintSpecInfo(spec)
 	}
 
 	// Reviews all defined API routes and builds requests as defined
-	BuildRequestsFromPaths(spec, client)
+	BuildRequestsFromPaths(spec, client, apiTarget, enhanced, maxRetries)
 }
 
 func ResolveRef(spec map[string]interface{}, ref string) map[string]interface{} {
@@ -912,15 +1245,11 @@ func XmlFromObject(obj map[string]interface{}) string {
 		case []interface{}:
 			for _, item := range val {
 				b.WriteString("<" + k + ">")
-				if m, ok := item.(map[string]interface{}); ok {
-					b.WriteString(XmlFromObject(m))
-				} else {
-					b.WriteString(XmlFromObject(m))
-				}
+				b.WriteString(xmlNodeValue(item))
 				b.WriteString("</" + k + ">")
 			}
 		default:
-			b.WriteString(fmt.Sprintf("<%s>%v</%s>", k, val, k))
+			b.WriteString(fmt.Sprintf("<%s>%s</%s>", k, xmlText(fmt.Sprintf("%v", val)), k))
 		}
 	}
 
