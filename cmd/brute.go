@@ -26,7 +26,7 @@ var endpointWordlist string
 var prefixDirs []string = []string{"", "/swagger", "/swagger/docs", "/swagger/latest", "/swagger/v1", "/swagger/v2", "/swagger/v3", "/swagger/static", "/swagger/ui", "/swagger-ui", "/api-docs", "/api-docs/v1", "/api-docs/v2", "/apidocs", "/api", "/api/v1", "/api/v2", "/api/v3", "/v1", "/v2", "/v3", "/doc", "/docs", "/docs/swagger", "/docs/swagger/v1", "/docs/swagger/v2", "/docs/swagger-ui", "/docs/swagger-ui/v1", "/docs/swagger-ui/v2", "/docs/v1", "/docs/v2", "/docs/v3", "/public", "/redoc"}
 var jsonEndpoints []string = []string{"", "/index", "/swagger", "/swagger-ui", "/swagger-resources", "/swagger-config", "/openapi", "/api", "/api-docs", "/apidocs", "/v1", "/v2", "/v3", "/doc", "/docs", "/apispec", "/apispec_1", "/api-merged"}
 var javascriptEndpoints []string = []string{"/swagger-ui-init", "/swagger-ui-bundle", "/swagger-ui-standalone-preset", "/swagger-ui", "/swagger-ui.min", "/swagger-ui-es-bundle-core", "/swagger-ui-es-bundle", "/swagger-ui-standalone-preset", "/swagger-ui-layout", "/swagger-ui-plugins"}
-var priorityURLs []string = []string{"/swagger.json", "/openapi.json", "/api-docs", "/swagger", "/docs", "/api/swagger.json", "/api/openapi.json", "/api-docs/swagger.json", "/api/schema/", "/webjars/swagger-ui/index.html", "/API/swagger/ui/index", "/swagger/ui/index", "/v2/swagger.json", "/v2/openapi.json", "/v2/api-docs", "/v3/api-docs", "/v3/openapi.json", "/public/api-merged.json", "/analytics/v1/swagger", "/api.json", "/api/4.0/swagger.json", "/api/api-doc/openapi.json", "/api/api-doc/openapi.yaml", "/api/doc.json", "/api/docs.json", "/api/swagger", "/api/swagger/ui/index", "/api/v1/swagger", "/api/v2/api-docs", "/api/v2/openapi.json", "/api/v2/swagger.json", "/api/v3/api-docs", "/api/v3/apispec", "/api/workorder/openapi.json", "/apidocs", "/audiences/v1/swagger", "/audittrail/v1/swagger", "/certification/v1/swagger", "/citrixapi/store/swagger.json", "/conferencetool/v1/swagger", "/course/v1/swagger", "/dcl_swagger.yaml", "/doc/doc.json", "/doc/swagger.json", "/docs/swagger.json", "/docs/v1/swagger.json", "/ecommerce/v1/swagger", "/enrollment/v1/swagger", "/externalids/v1/swagger", "/impact/v1/swagger", "/learn/v1/swagger", "/learningplan/v1/swagger", "/manage/v1/swagger", "/management/info", "/marketplace/v1/swagger", "/messenger/v1/swagger", "/notifications/v1/swagger", "/openapi", "/openapi/spec.json", "/otj/v1/swagger", "/pages/v1/swagger", "/poweruser/v1/swagger", "/proctoring/v1/swagger", "/report/v1/swagger", "/swagger-ui/index.html", "/swagger-ui/openapi.json", "/swagger.yaml", "/swagger/0.1.0/swagger.json", "/swagger/doc.json", "/swagger/latest/swagger.json", "/swagger/swagger.json", "/swagger/test/swagger.json", "/swagger/ui/index.html", "/swagger/v1/openapiv2.json", "/swagger/v1/swagger.json", "/swagger/v2/swagger.json", "/swagger/v4/swagger.json", "/v1/openapi.json", "/v1/swagger", "/v1/swagger.json", "/swagger/docs/v1", "/swagger/docs/v1.json", "/Api/swagger/docs/v1", "/swagger/v1/swagger.json", "/api/api-docs/swagger.json", "/api/docs/", "/api/docs", "/swagger-ui"}
+var priorityURLs []string = []string{"/swagger.json", "/openapi.json", "/api-docs", "/swagger", "/docs", "/api/swagger.json", "/api/openapi.json", "/api-docs/swagger.json", "/api/schema/", "/webjars/swagger-ui/index.html", "/API/swagger/ui/index", "/swagger/ui/index", "/v2/swagger.json", "/v2/openapi.json", "/v2/api-docs", "/v3/api-docs", "/v3/openapi.json", "/public/api-merged.json", "/analytics/v1/swagger", "/api.json", "/api/4.0/swagger.json", "/api/api-doc/openapi.json", "/api/api-doc/openapi.yaml", "/api/doc.json", "/api/docs.json", "/api/swagger", "/api/swagger/ui/index", "/api/v1/swagger", "/api/v2/api-docs", "/api/v2/openapi.json", "/api/v2/swagger.json", "/api/v3/api-docs", "/api/v3/apispec", "/api/workorder/openapi.json", "/apidocs", "/audiences/v1/swagger", "/audittrail/v1/swagger", "/certification/v1/swagger", "/citrixapi/store/swagger.json", "/conferencetool/v1/swagger", "/course/v1/swagger", "/dcl_swagger.yaml", "/doc/doc.json", "/doc/swagger.json", "/docs/swagger.json", "/docs/v1/swagger.json", "/ecommerce/v1/swagger", "/enrollment/v1/swagger", "/externalids/v1/swagger", "/impact/v1/swagger", "/learn/v1/swagger", "/learningplan/v1/swagger", "/manage/v1/swagger", "/management/info", "/marketplace/v1/swagger", "/messenger/v1/swagger", "/notifications/v1/swagger", "/openapi", "/openapi/spec.json", "/openapi2.json", "/openapi2.yaml", "/otj/v1/swagger", "/pages/v1/swagger", "/poweruser/v1/swagger", "/proctoring/v1/swagger", "/report/v1/swagger", "/rest/swagger.json", "/rest/swagger.yaml", "/rest-api/swagger.json", "/spec/swagger.json", "/spec/swagger.yaml", "/spec/openapi.json", "/spec/openapi.yaml", "/swagger-ui/index.html", "/swagger-ui/openapi.json", "/swagger.yaml", "/swagger/0.1.0/swagger.json", "/swagger/doc.json", "/swagger/latest/swagger.json", "/swagger/swagger.json", "/swagger/test/swagger.json", "/swagger/ui/index.html", "/swagger/v1/openapiv2.json", "/swagger/v1/swagger.json", "/swagger/v2/swagger.json", "/swagger/v4/swagger.json", "/v1/openapi.json", "/v1/swagger", "/v1/swagger.json", "/swagger/docs/v1", "/swagger/docs/v1.json", "/Api/swagger/docs/v1", "/swagger/v1/swagger.json", "/api/api-docs/swagger.json", "/api/docs/", "/api/docs", "/swagger-ui"}
 
 var bruteCmd = &cobra.Command{
 	Use:   "brute",
@@ -48,12 +48,34 @@ var bruteCmd = &cobra.Command{
 
 		client := CheckAndConfigureProxy()
 
-		var allURLs []string
+		// Phase 1: Check if the provided URL is a direct spec file
+		if strings.HasSuffix(swaggerURL, ".json") || strings.HasSuffix(swaggerURL, ".yaml") || strings.HasSuffix(swaggerURL, ".yml") {
+			log.Info("Checking if URL is a direct spec file...")
+			spec, err := TryDirectSpec(swaggerURL, client)
+			if err == nil && spec != nil {
+				log.Infof("Found direct spec at: %s\n", swaggerURL)
+				handleSpecFound(spec)
+				return
+			}
+		}
+
+		// Phase 2: Try Swagger UI discovery on common paths
 		u, err := url.Parse(swaggerURL)
 		if err != nil {
 			log.Warnf("Error parsing URL:%s\n", err)
 		}
 		target := u.Scheme + "://" + u.Host
+
+		log.Info("Attempting Swagger UI discovery...")
+		spec, err := TrySwaggerUIDiscovery(target, client)
+		if err == nil && spec != nil {
+			handleSpecFound(spec)
+			return
+		}
+
+		// Phase 3 & 4: Priority URLs and full brute force
+		log.Info("Starting brute force discovery...")
+		var allURLs []string
 		if endpointWordlist == "" {
 			allURLs = append(allURLs, makeURLs(target, priorityURLs, "", true)...)
 			allURLs = append(allURLs, makeURLs(target, jsonEndpoints, "", false)...)
@@ -86,34 +108,7 @@ var bruteCmd = &cobra.Command{
 
 		specFound, definitionFile := findDefinitionFile(allURLs, client)
 		if specFound {
-			definedOperations, err := json.Marshal(definitionFile)
-			if err != nil {
-				log.Errorf("Error parsing definition file:%s\n", err)
-			}
-
-			if outfile != "" {
-
-				file, err := os.OpenFile(outfile, os.O_CREATE|os.O_WRONLY, 0644)
-				if err != nil {
-					log.Errorf("Error opening file: %s\n", err)
-				}
-
-				defer file.Close()
-
-				_, err = file.Write(definedOperations)
-				if err != nil {
-					log.Errorf("Error writing file: %s\n", err)
-				} else {
-					f, _ := filepath.Abs(outfile)
-					log.Infof("Wrote file to %s\n", f)
-				}
-			} else {
-				if endpointOnly {
-					return
-				} else {
-					fmt.Println(string(definedOperations))
-				}
-			}
+			handleSpecFound(definitionFile)
 			// TODO: Check if (future implementation) automate flag is true and if so than call the 'sj automate' command with the discovered definition file.
 		} else {
 			log.Errorf("\nNo definition file found for:\t%s\n", swaggerURL)
@@ -150,10 +145,24 @@ func findDefinitionFile(urls []string, client http.Client) (bool, *openapi3.T) {
 
 	for i, url := range urls {
 		ct := CheckContentType(client, url)
+		// Check for JSON content type
 		if strings.Contains(ct, "application/json") {
 			bodyBytes, _, _ := MakeRequest(client, "GET", url, timeout, nil)
 			if bodyBytes != nil {
-				checkSpec := UnmarshalSpec(bodyBytes)
+				// Use UnmarshalSpecBytes for content-type-based parsing
+				checkSpec := UnmarshalSpecBytes(bodyBytes)
+				if (strings.HasPrefix(checkSpec.OpenAPI, "2") || strings.HasPrefix(checkSpec.OpenAPI, "3")) && checkSpec.Paths != nil {
+					fmt.Println("")
+					log.Infof("Definition file found: %s\n", url)
+					return true, checkSpec
+				}
+			}
+		} else if strings.Contains(ct, "application/yaml") || strings.Contains(ct, "application/x-yaml") || strings.Contains(ct, "text/yaml") || strings.Contains(ct, "text/yml") {
+			// Check for YAML content type
+			bodyBytes, _, _ := MakeRequest(client, "GET", url, timeout, nil)
+			if bodyBytes != nil {
+				// Use UnmarshalSpecBytes which handles YAML without relying on global URL
+				checkSpec := UnmarshalSpecBytes(bodyBytes)
 				if (strings.HasPrefix(checkSpec.OpenAPI, "2") || strings.HasPrefix(checkSpec.OpenAPI, "3")) && checkSpec.Paths != nil {
 					fmt.Println("")
 					log.Infof("Definition file found: %s\n", url)
@@ -163,6 +172,41 @@ func findDefinitionFile(urls []string, client http.Client) (bool, *openapi3.T) {
 		} else if strings.Contains(ct, "application/javascript") {
 			bodyBytes, bodyString, _ := MakeRequest(client, "GET", url, timeout, nil)
 			if bodyBytes != nil {
+				// First attempt: Check for Swashbuckle configuration
+				swashPath := ExtractSwashbuckleConfig(bodyString)
+				if swashPath != "" {
+					fullURL, err := ResolveRelativeURL(url, swashPath)
+					if err == nil {
+						swashSpec, err := FetchAndValidateSpec(fullURL, client)
+						if err == nil && swashSpec != nil {
+							log.Infof("\nFound spec via Swashbuckle config at: %s\n", fullURL)
+							return true, swashSpec
+						}
+					}
+				}
+
+				// Second attempt: Extract spec URL from JavaScript
+				specURL := ExtractSpecURLFromJS(bodyString)
+				if specURL != "" {
+					fullURL, err := ResolveRelativeURL(url, specURL)
+					if err == nil {
+						// Fetch the referenced spec
+						refSpec, err := FetchAndValidateSpec(fullURL, client)
+						if err == nil && refSpec != nil {
+							log.Infof("\nFound spec URL referenced in JavaScript: %s\n", fullURL)
+							return true, refSpec
+						}
+					}
+				}
+
+				// Third attempt: Extract embedded spec from JavaScript (original logic + enhanced)
+				embeddedSpec, err := ExtractEmbeddedSpecFromJS(bodyString)
+				if err == nil && embeddedSpec != nil && embeddedSpec.Paths != nil {
+					log.Infof("\nFound embedded spec in JavaScript file at %s\n", url)
+					return true, embeddedSpec
+				}
+
+				// Fallback: Try original simple regex pattern for backward compatibility
 				regexPattern := regexp.MustCompile(`(?s)let\s+(\w+)\s*=\s*({.*?});`)
 				matches := regexPattern.FindAllStringSubmatch(bodyString, -1)
 				for _, match := range matches {
@@ -236,6 +280,37 @@ func ExtractSpecFromJS(bodyBytes []byte) []byte {
 	}
 
 	return bodyBytes
+}
+
+// handleSpecFound processes a discovered spec by marshaling and outputting it
+func handleSpecFound(spec *openapi3.T) {
+	definedOperations, err := json.Marshal(spec)
+	if err != nil {
+		log.Errorf("Error parsing definition file: %s\n", err)
+		return
+	}
+
+	if outfile != "" {
+		file, err := os.OpenFile(outfile, os.O_CREATE|os.O_WRONLY, 0644)
+		if err != nil {
+			log.Errorf("Error opening file: %s\n", err)
+			return
+		}
+		defer file.Close()
+
+		_, err = file.Write(definedOperations)
+		if err != nil {
+			log.Errorf("Error writing file: %s\n", err)
+		} else {
+			f, _ := filepath.Abs(outfile)
+			log.Infof("Wrote file to %s\n", f)
+		}
+	} else {
+		if endpointOnly {
+			return
+		}
+		fmt.Println(string(definedOperations))
+	}
 }
 
 func UnmarshalSpec(bodyBytes []byte) (newDoc *openapi3.T) {

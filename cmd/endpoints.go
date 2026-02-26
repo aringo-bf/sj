@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 
 	log "github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
@@ -35,6 +36,13 @@ This list contains the raw endpoints (parameter values will not be appended or m
 			specFile, err := os.Open(localFile)
 			if err != nil {
 				log.Fatal("Error opening file:", err)
+			}
+			// Set the base directory for resolving external refs
+			specBaseDir = filepath.Dir(localFile)
+			if specBaseDir == "." {
+				if absPath, err := filepath.Abs(localFile); err == nil {
+					specBaseDir = filepath.Dir(absPath)
+				}
 			}
 			bodyBytes, _ = io.ReadAll(specFile)
 			GenerateRequests(bodyBytes, client)

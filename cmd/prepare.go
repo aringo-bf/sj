@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"time"
 
 	log "github.com/sirupsen/logrus"
@@ -40,6 +41,13 @@ This enables you to test specific API functions for common vulnerabilities or mi
 			specFile, err := os.Open(localFile)
 			if err != nil {
 				log.Fatal("Error opening file:", err)
+			}
+			// Set the base directory for resolving external refs
+			specBaseDir = filepath.Dir(localFile)
+			if specBaseDir == "." {
+				if absPath, err := filepath.Abs(localFile); err == nil {
+					specBaseDir = filepath.Dir(absPath)
+				}
 			}
 
 			specBytes, _ := io.ReadAll(specFile)
