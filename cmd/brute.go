@@ -288,7 +288,7 @@ func handleSpecFound(spec *openapi3.T) {
 	}
 
 	if outfile != "" {
-		file, err := os.OpenFile(outfile, os.O_CREATE|os.O_WRONLY, 0644)
+		file, err := os.OpenFile(outfile, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
 		if err != nil {
 			log.Errorf("Error opening file: %s\n", err)
 			return

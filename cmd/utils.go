@@ -294,7 +294,10 @@ func BuildRequestsFromPaths(spec map[string]interface{}, client http.Client, api
 									}
 
 									if name, ok := pMap["name"].(string); ok {
-										in := pMap["in"].(string)
+										in, ok := pMap["in"].(string)
+										if !ok {
+											continue
+										}
 
 										// Handle schema-based parameters (OpenAPI v3 and some v2)
 										var handledAsObject bool // Track if we already handled this as an object
@@ -673,7 +676,20 @@ func BuildRequestsFromPaths(spec map[string]interface{}, client http.Client, api
 							var result []byte
 
 							if verbose {
-								result, _ = json.Marshal(VerboseResult{Method: method, Preview: resp[:tempResponsePreviewLength], Status: sc, Target: logURL.Path, Curl: curl})
+								// Try to parse preview as JSON if content-type indicates JSON
+								var preview interface{}
+								if strings.Contains(strings.ToLower(responseContentType), "application/json") {
+									var previewObj interface{}
+									if err := json.Unmarshal([]byte(resp[:tempResponsePreviewLength]), &previewObj); err == nil {
+										preview = previewObj
+									} else {
+										// JSON content-type but invalid JSON or truncated, keep as string
+										preview = string(resp[:tempResponsePreviewLength])
+									}
+								} else {
+									preview = string(resp[:tempResponsePreviewLength])
+								}
+								result, _ = json.Marshal(VerboseResult{Method: method, Preview: preview, Status: sc, ContentType: responseContentType, Target: logURL.Path, Curl: curl})
 							} else {
 								result, _ = json.Marshal(Result{Method: method, Status: sc, Target: logURL.Path})
 							}
@@ -1098,6 +1114,12 @@ func ResolveRefWithContext(spec map[string]interface{}, ref string) (map[string]
 			// Try to get the cached external spec as context
 			filePath := strings.SplitN(ref, "#", 2)[0]
 			fullPath := filepath.Clean(filepath.Join(baseDir, filePath))
+			// Validate path is within baseDir (prevent traversal)
+			cleanBase := filepath.Clean(baseDir)
+			if !strings.HasPrefix(fullPath, cleanBase+string(filepath.Separator)) && fullPath != cleanBase {
+				// Path traversal attempt detected, return without external spec context
+				return resolved, spec
+			}
 			if externalSpec, exists := externalRefCache[fullPath]; exists {
 				return resolved, externalSpec
 			}
@@ -1137,6 +1159,13 @@ func ResolveExternalRef(ref string, baseDir string) map[string]interface{} {
 	// Resolve path relative to the provided base directory
 	filePath := filepath.Join(baseDir, relativePath)
 	filePath = filepath.Clean(filePath)
+
+	// Validate path is within baseDir (prevent path traversal attacks)
+	cleanBase := filepath.Clean(baseDir)
+	if !strings.HasPrefix(filePath, cleanBase+string(filepath.Separator)) && filePath != cleanBase {
+		// Path traversal attempt detected
+		return nil
+	}
 
 	// Check cache first
 	if cached, exists := externalRefCache[filePath]; exists {

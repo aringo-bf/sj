@@ -19,9 +19,10 @@ var (
 	accept                 string
 	avoidDangerousRequests string
 	contentType            string
-	dangerousStrings       []string = []string{"add", "block", "build", "buy", "change", "clear", "create", "delete", "deploy", "destroy", "drop", "edit", "emergency", "erase", "execute", "insert", "modify", "order", "overwrite", "pause", "purchase", "rebuild", "remove", "replace", "reset", "restart", "revoke", "run", "sell", "send", "set", "start", "stop", "update", "upload", "write"}
+	dangerousStrings       []string = []string{"block", "change", "clear", "delete", "destroy", "drop", "erase", "overwrite", "pause", "rebuild", "remove", "replace", "reset", "restart", "revoke", "set", "stop", "write"}
 	Headers                []string
 	requestStatus          int
+	responseContentType    string
 	riskSurveyed           bool = false
 	UserAgent              string
 	limiter                *rate.Limiter
@@ -94,7 +95,15 @@ func MakeRequestWithHeaders(client http.Client, method, target string, timeout i
 	}
 	endpoint := endpointForDangerousCheck(u)
 	for _, v := range dangerousStrings {
-		if currentCommand == "automate" && strings.Contains(endpoint, v) && !strings.Contains(strings.Join(safeWords, ","), v) {
+		// Check if this dangerous word is in the safe list (exact match)
+		isWordSafe := false
+		for _, safeWord := range safeWords {
+			if safeWord == v {
+				isWordSafe = true
+				break
+			}
+		}
+		if currentCommand == "automate" && strings.Contains(endpoint, v) && !isWordSafe {
 			userChoice = ""
 			if avoidDangerousRequests == "y" {
 				return nil, "", 0
@@ -222,7 +231,8 @@ func MakeRequestWithHeaders(client http.Client, method, target string, timeout i
 
 	bodyBytes, _ := io.ReadAll(resp.Body)
 	bodyString := string(bodyBytes)
-
+	// Store response content-type for JSON output formatting
+	responseContentType = resp.Header.Get("Content-Type")
 	if (resp.StatusCode == 301 || resp.StatusCode == 302) && strings.Contains(bodyString, "<html>") {
 		redirect, _ := resp.Location()
 		redirectTarget := target
