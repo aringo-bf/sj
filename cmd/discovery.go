@@ -18,6 +18,40 @@ import (
 )
 
 // ============================================
+// Compiled Regexes (package-level for performance)
+// ============================================
+
+var (
+	// ExtractSpecURLFromJS patterns
+	reURLDirect     = regexp.MustCompile(`url:\s*["']([^"']+)["']`)
+	reURLsArray     = regexp.MustCompile(`urls:\s*\[\s*{\s*url:\s*["']([^"']+)["']`)
+	reConstSpecFile = regexp.MustCompile(`const\s+\w+\s*=\s*["']([^"']+\.(?:json|yaml|yml))["']`)
+	reDefaultDefURL = regexp.MustCompile(`defaultDefinitionUrl\s*=\s*["']([^"']+)["']`)
+	reDefinitionURL = regexp.MustCompile(`definitionURL\s*=\s*["']([^"']+)["']`)
+
+	// ExtractSwashbuckleConfig patterns
+	reSwashbuckleConfig = regexp.MustCompile(`window\.swashbuckleConfig\s*=\s*{([\s\S]*?)};`)
+	reDiscoveryPaths    = regexp.MustCompile(`discoveryPaths\s*:\s*\[\s*["']([^"']+)["']`)
+
+	// JSObjectToJSON patterns
+	reUnquotedKeys  = regexp.MustCompile(`([{,]\s*)(\w+)\s*:`)
+	reTrailingComma = regexp.MustCompile(`,\s*([}\]])`)
+
+	// ExtractEmbeddedSpecFromJS patterns
+	reVarAssignment    = regexp.MustCompile(`(?:var|let|const)\s+(\w+)\s*=\s*({[\s\S]*?});`)
+	reSimpleAssignment = regexp.MustCompile(`(\w+)\s*=\s*({[\s\S]*?});`)
+
+	// extractSpecURLFromHTML patterns
+	reSwaggerUIBundle = regexp.MustCompile(`SwaggerUIBundle\s*\(\s*{\s*url:\s*["']([^"']+)["']`)
+
+	// extractSpecURLWithRegex patterns
+	reURLWithExtension       = regexp.MustCompile(`url:\s*["']([^"']+\.(?:json|yaml|yml))["']`)
+	reSwaggerUIBundleWithExt = regexp.MustCompile(`SwaggerUIBundle\s*\(\s*{\s*url:\s*["']([^"']+)["']`)
+	reSpecURL                = regexp.MustCompile(`spec(?:Url)?:\s*["']([^"']+\.(?:json|yaml|yml))["']`)
+	reConfigURL              = regexp.MustCompile(`configUrl:\s*["']([^"']+\.(?:json|yaml|yml))["']`)
+)
+
+// ============================================
 // JavaScript Spec Extraction Functions
 // ============================================
 
@@ -25,20 +59,11 @@ import (
 // using multiple regex patterns. Returns the first matching URL found, or empty string.
 func ExtractSpecURLFromJS(jsBody string) string {
 	patterns := []*regexp.Regexp{
-		// Pattern 1: Direct URL assignment (url: "...")
-		regexp.MustCompile(`url:\s*["']([^"']+)["']`),
-
-		// Pattern 2: URLs array with objects (urls: [{ url: "..." }])
-		regexp.MustCompile(`urls:\s*\[\s*{\s*url:\s*["']([^"']+)["']`),
-
-		// Pattern 3: Variable assignment to spec file (const specUrl = "...")
-		regexp.MustCompile(`const\s+\w+\s*=\s*["']([^"']+\.(?:json|yaml|yml))["']`),
-
-		// Pattern 4: Default definition URL (defaultDefinitionUrl = "...")
-		regexp.MustCompile(`defaultDefinitionUrl\s*=\s*["']([^"']+)["']`),
-
-		// Pattern 5: Definition URL property (definitionURL = "...")
-		regexp.MustCompile(`definitionURL\s*=\s*["']([^"']+)["']`),
+		reURLDirect,
+		reURLsArray,
+		reConstSpecFile,
+		reDefaultDefURL,
+		reDefinitionURL,
 	}
 
 	for _, pattern := range patterns {
@@ -56,13 +81,11 @@ func ExtractSpecURLFromJS(jsBody string) string {
 // Swashbuckle is commonly used in ASP.NET Core applications.
 func ExtractSwashbuckleConfig(content string) string {
 	// Pattern: window.swashbuckleConfig = { ... discoveryPaths: ["/swagger/v1/swagger.json"] ... };
-	configRegex := regexp.MustCompile(`window\.swashbuckleConfig\s*=\s*{([\s\S]*?)};`)
-	matches := configRegex.FindStringSubmatch(content)
+	matches := reSwashbuckleConfig.FindStringSubmatch(content)
 
 	if len(matches) > 1 {
 		configContent := matches[1]
-		pathRegex := regexp.MustCompile(`discoveryPaths\s*:\s*\[\s*["']([^"']+)["']`)
-		pathMatches := pathRegex.FindStringSubmatch(configContent)
+		pathMatches := reDiscoveryPaths.FindStringSubmatch(configContent)
 
 		if len(pathMatches) > 1 {
 			return pathMatches[1]
@@ -83,12 +106,10 @@ func JSObjectToJSON(jsObject string) (string, error) {
 
 	// Add quotes to unquoted keys: {key: -> {"key":
 	// This regex finds word characters followed by colon after { or ,
-	keyRegex := regexp.MustCompile(`([{,]\s*)(\w+)\s*:`)
-	cleaned = keyRegex.ReplaceAllString(cleaned, `$1"$2":`)
+	cleaned = reUnquotedKeys.ReplaceAllString(cleaned, `$1"$2":`)
 
 	// Remove trailing commas before } or ]
-	trailingCommaRegex := regexp.MustCompile(`,\s*([}\]])`)
-	cleaned = trailingCommaRegex.ReplaceAllString(cleaned, "$1")
+	cleaned = reTrailingComma.ReplaceAllString(cleaned, "$1")
 
 	return cleaned, nil
 }
@@ -210,11 +231,8 @@ func ExtractEmbeddedSpecFromJS(jsBody string) (*openapi3.T, error) {
 
 	// Patterns to find variable assignments with objects
 	patterns := []*regexp.Regexp{
-		// var/let/const variable = { ... };
-		regexp.MustCompile(`(?:var|let|const)\s+(\w+)\s*=\s*({[\s\S]*?});`),
-
-		// variable = { ... };
-		regexp.MustCompile(`(\w+)\s*=\s*({[\s\S]*?});`),
+		reVarAssignment,
+		reSimpleAssignment,
 	}
 
 	for _, pattern := range patterns {
@@ -487,15 +505,13 @@ func ExtractSpecURLFromHTML(htmlContent string) string {
 		scriptContent := s.Text()
 
 		// Check for url: "..." pattern
-		urlPattern := regexp.MustCompile(`url:\s*["']([^"']+)["']`)
-		if matches := urlPattern.FindStringSubmatch(scriptContent); len(matches) > 1 {
+		if matches := reURLDirect.FindStringSubmatch(scriptContent); len(matches) > 1 {
 			specURL = matches[1]
 			return false // Break the loop
 		}
 
 		// Check for SwaggerUIBundle pattern
-		bundlePattern := regexp.MustCompile(`SwaggerUIBundle\s*\(\s*{\s*url:\s*["']([^"']+)["']`)
-		if matches := bundlePattern.FindStringSubmatch(scriptContent); len(matches) > 1 {
+		if matches := reSwaggerUIBundle.FindStringSubmatch(scriptContent); len(matches) > 1 {
 			specURL = matches[1]
 			return false
 		}
@@ -552,17 +568,10 @@ func ExtractSpecURLFromHTML(htmlContent string) string {
 // extractSpecURLWithRegex uses regex patterns as a fallback for HTML parsing
 func extractSpecURLWithRegex(htmlContent string) string {
 	patterns := []*regexp.Regexp{
-		// Pattern 1: url: "..." in any context
-		regexp.MustCompile(`url:\s*["']([^"']+\.(?:json|yaml|yml))["']`),
-
-		// Pattern 2: SwaggerUIBundle({ url: "..." })
-		regexp.MustCompile(`SwaggerUIBundle\s*\(\s*{\s*url:\s*["']([^"']+)["']`),
-
-		// Pattern 3: spec: "..." or specUrl: "..."
-		regexp.MustCompile(`spec(?:Url)?:\s*["']([^"']+\.(?:json|yaml|yml))["']`),
-
-		// Pattern 4: configUrl or configObject
-		regexp.MustCompile(`configUrl:\s*["']([^"']+\.(?:json|yaml|yml))["']`),
+		reURLWithExtension,
+		reSwaggerUIBundleWithExt,
+		reSpecURL,
+		reConfigURL,
 	}
 
 	for _, pattern := range patterns {
