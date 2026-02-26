@@ -19,6 +19,7 @@ var quiet bool
 var randomUserAgent bool
 var rateLimit int
 var safeWords []string
+var strictProtocol bool
 var swaggerURL string
 var timeout int64
 
@@ -80,6 +81,7 @@ func init() {
 	rootCmd.PersistentFlags().BoolVar(&randomUserAgent, "randomize-user-agent", false, "Randomizes the user agent string. Default is 'false'.")
 	// rootCmd.PersistentFlags().IntVarP(&rateLimit, "rate", "r", 15, "Limit the number of requests per second.") // NEED TO RE-IMPLEMENT RATE LIMIT
 	rootCmd.PersistentFlags().StringArrayVarP(&safeWords, "safe-word", "s", nil, "Avoids 'dangerous word' check for the specified word(s). Multiple flags are accepted.")
+	rootCmd.PersistentFlags().BoolVar(&strictProtocol, "strict-protocol", false, "Use exact protocol from spec without HTTPS upgrade attempts. Default is 'false'.")
 	rootCmd.PersistentFlags().StringVarP(&apiTarget, "target", "T", "", "Manually set a target for the requests to be made if separate from the host the documentation resides on.")
 	rootCmd.PersistentFlags().Int64VarP(&timeout, "timeout", "t", 30, "Set the request timeout period.")
 	rootCmd.PersistentFlags().StringVarP(&swaggerURL, "url", "u", "", "Loads the documentation file from a URL")

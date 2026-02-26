@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"time"
 
 	log "github.com/sirupsen/logrus"
 	"gopkg.in/yaml.v3"
@@ -36,6 +37,78 @@ type SchemaNode struct {
 	OneOf                []*SchemaNode
 	AnyOf                []*SchemaNode
 	AdditionalProperties *SchemaNode
+}
+
+// TryHTTPSUpgrade attempts to upgrade an HTTP target URL to HTTPS.
+// It only upgrades if:
+// - strictProtocol flag is false (HTTPS upgrade enabled)
+// - target URL uses http:// (not already https://)
+// - spec was retrieved via HTTPS OR target is on same host as spec
+// - target URL doesn't have an explicit port (e.g., :8080)
+// Returns the upgraded URL if HTTPS works, otherwise returns the original URL.
+func TryHTTPSUpgrade(client http.Client, specURL, targetURL string) string {
+	// Skip if strict protocol mode is enabled
+	if strictProtocol {
+		return targetURL
+	}
+
+	// Parse target URL
+	parsedTarget, err := url.Parse(targetURL)
+	if err != nil || parsedTarget.Scheme != "http" {
+		return targetURL // Not HTTP or invalid, return as-is
+	}
+
+	// Check if target has explicit port (e.g., example.com:8080)
+	// If so, don't upgrade - explicit port indicates specific endpoint
+	if parsedTarget.Port() != "" {
+		return targetURL
+	}
+
+	// Parse spec URL to determine if we should upgrade
+	shouldUpgrade := false
+	if specURL != "" {
+		parsedSpec, err := url.Parse(specURL)
+		if err == nil {
+			// Upgrade if spec was retrieved via HTTPS
+			if parsedSpec.Scheme == "https" {
+				shouldUpgrade = true
+			}
+			// Also upgrade if target is on same host as spec (regardless of spec protocol)
+			// Use Hostname() to exclude port, EqualFold for case-insensitive DNS comparison
+			if strings.EqualFold(parsedSpec.Hostname(), parsedTarget.Hostname()) {
+				shouldUpgrade = true
+			}
+		}
+	}
+
+	if !shouldUpgrade {
+		return targetURL
+	}
+
+	// Construct HTTPS version of the URL
+	httpsURL := strings.Replace(targetURL, "http://", "https://", 1)
+
+	// Test HTTPS connectivity with HEAD request (5 second timeout)
+	testClient := client
+	testClient.Timeout = 5 * time.Second
+
+	req, err := http.NewRequest("HEAD", httpsURL, nil)
+	if err != nil {
+		return targetURL
+	}
+
+	resp, err := testClient.Do(req)
+	if err != nil {
+		// HTTPS failed, fall back to HTTP silently
+		return targetURL
+	}
+	defer resp.Body.Close()
+
+	// HTTPS works! Use it
+	if !quiet {
+		log.Infof("Upgraded HTTP target to HTTPS: %s", httpsURL)
+	}
+	return httpsURL
 }
 
 func BuildRequestsFromPaths(spec map[string]interface{}, client http.Client) {
@@ -534,6 +607,9 @@ func GenerateRequests(bodyBytes []byte, client http.Client) {
 		u = &url.URL{}
 	}
 
+	// Track if user manually set target with -T flag
+	userSetTarget := apiTarget != ""
+
 	// Parse basePath and server info from spec
 	// Always extract basePath, even if -T was used (so -T sets host but spec sets path)
 	if v, ok := spec["swagger"].(string); ok && strings.HasPrefix(v, "2") {
@@ -631,6 +707,11 @@ func GenerateRequests(bodyBytes []byte, client http.Client) {
 				log.Fatal("No server information found in spec and no URL provided. Use -T to specify target server.")
 			}
 		}
+	}
+
+	// Attempt HTTPS upgrade if target was extracted from spec (not user-provided with -T)
+	if !userSetTarget && apiTarget != "" {
+		apiTarget = TryHTTPSUpgrade(client, swaggerURL, apiTarget)
 	}
 
 	if os.Args[1] != "endpoints" {
