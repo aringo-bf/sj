@@ -243,9 +243,23 @@ func BuildRequestsFromPaths(spec map[string]interface{}, client http.Client, api
 	}
 
 	var errorDescriptions = make(map[any]string)
-	for pathName, pathItem := range paths {
+	pathKeys := make([]string, 0, len(paths))
+	for pathName := range paths {
+		pathKeys = append(pathKeys, pathName)
+	}
+	slices.Sort(pathKeys)
+
+	for _, pathName := range pathKeys {
+		pathItem := paths[pathName]
 		if ops, ok := pathItem.(map[string]interface{}); ok {
-			for method, op := range ops {
+			methodKeys := make([]string, 0, len(ops))
+			for method := range ops {
+				methodKeys = append(methodKeys, method)
+			}
+			slices.Sort(methodKeys)
+
+			for _, method := range methodKeys {
+				op := ops[method]
 				switch strings.ToLower(method) {
 				// SKIPS THE "DELETE" AND "PATCH" METHODS FOR SAFETY
 				case "delete":

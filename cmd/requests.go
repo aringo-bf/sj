@@ -55,6 +55,8 @@ var (
 	userChoice string
 )
 
+const maxRedirectDepth = 10
+
 func endpointForDangerousCheck(u *url.URL) string {
 	path := u.EscapedPath()
 	if path == "" {
@@ -83,6 +85,10 @@ func rewindReader(r io.Reader) io.Reader {
 // MakeRequestWithHeaders is like MakeRequest but accepts custom headers for the request
 // This is used by enhanced mode to apply user-modified headers
 func MakeRequestWithHeaders(client http.Client, method, target string, timeout int64, reqData io.Reader, customHeaders map[string]string) ([]byte, string, int) {
+	return makeRequestWithHeaders(client, method, target, timeout, reqData, customHeaders, 0)
+}
+
+func makeRequestWithHeaders(client http.Client, method, target string, timeout int64, reqData io.Reader, customHeaders map[string]string, redirectDepth int) ([]byte, string, int) {
 	if quiet {
 		avoidDangerousRequests = "y"
 	}
@@ -234,6 +240,12 @@ func MakeRequestWithHeaders(client http.Client, method, target string, timeout i
 	// Store response content-type for JSON output formatting
 	responseContentType = resp.Header.Get("Content-Type")
 	if (resp.StatusCode == 301 || resp.StatusCode == 302) && strings.Contains(bodyString, "<html>") {
+		if redirectDepth >= maxRedirectDepth {
+			log.Warnf("Maximum redirect depth (%d) reached for %s. Stopping redirect chain.", maxRedirectDepth, target)
+			requestStatus = resp.StatusCode
+			return bodyBytes, bodyString, requestStatus
+		}
+
 		redirect, _ := resp.Location()
 		redirectTarget := target
 		if redirect != nil {
@@ -244,7 +256,7 @@ func MakeRequestWithHeaders(client http.Client, method, target string, timeout i
 		if method != http.MethodGet && method != http.MethodHead {
 			redirectBody = rewindReader(reqData)
 		}
-		bodyBytes, bodyString, requestStatus = MakeRequestWithHeaders(client, method, redirectTarget, timeout, redirectBody, customHeaders)
+		bodyBytes, bodyString, requestStatus = makeRequestWithHeaders(client, method, redirectTarget, timeout, redirectBody, customHeaders, redirectDepth+1)
 		return bodyBytes, bodyString, requestStatus
 	}
 
