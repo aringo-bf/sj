@@ -4,15 +4,13 @@ import (
 	"context"
 	"crypto/tls"
 	"fmt"
+	"golang.org/x/time/rate"
 	"io"
 	"math/rand"
 	"net/http"
 	"net/url"
 	"strings"
 	"time"
-
-	log "github.com/sirupsen/logrus"
-	"golang.org/x/time/rate"
 )
 
 var (

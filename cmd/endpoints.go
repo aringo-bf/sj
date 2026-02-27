@@ -2,12 +2,10 @@ package cmd
 
 import (
 	"fmt"
+	"github.com/spf13/cobra"
 	"io"
 	"os"
 	"path/filepath"
-
-	log "github.com/sirupsen/logrus"
-	"github.com/spf13/cobra"
 )
 
 var endpointsCmd = &cobra.Command{

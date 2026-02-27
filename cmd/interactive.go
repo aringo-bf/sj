@@ -8,8 +8,6 @@ import (
 	"os"
 	"strconv"
 	"strings"
-
-	log "github.com/sirupsen/logrus"
 )
 
 // RequestState tracks the current state of a request for interactive modification

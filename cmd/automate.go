@@ -9,8 +9,6 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
-
-	log "github.com/sirupsen/logrus"
 )
 
 var getAccessibleEndpoints bool

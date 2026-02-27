@@ -4,8 +4,6 @@ import (
 	"encoding/base64"
 	"fmt"
 	"strings"
-
-	log "github.com/sirupsen/logrus"
 )
 
 var (

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	stdxml "encoding/xml"
 	"fmt"
+	"gopkg.in/yaml.v3"
 	"io"
 	"mime/multipart"
 	"net/http"
@@ -14,9 +15,6 @@ import (
 	"slices"
 	"strings"
 	"time"
-
-	log "github.com/sirupsen/logrus"
-	"gopkg.in/yaml.v3"
 )
 
 var accessibleEndpoints []string

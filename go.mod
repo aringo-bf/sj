@@ -5,7 +5,6 @@ go 1.24.0
 require (
 	github.com/PuerkitoBio/goquery v1.11.0
 	github.com/getkin/kin-openapi v0.132.0
-	github.com/sirupsen/logrus v1.9.1
 	github.com/spf13/cobra v1.6.1
 	golang.org/x/time v0.14.0
 	gopkg.in/yaml.v3 v3.0.1
@@ -24,5 +23,4 @@ require (
 	github.com/perimeterx/marshmallow v1.1.5 // indirect
 	github.com/spf13/pflag v1.0.5 // indirect
 	golang.org/x/net v0.47.0 // indirect
-	golang.org/x/sys v0.38.0 // indirect
 )
